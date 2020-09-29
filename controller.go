@@ -14,15 +14,24 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
+	"k8s.io/kubectl/pkg/scheme"
 )
 
 const includeAnno = "sec-ctrl/replicate"
 const excludeAnno = "sec-ctrl/exclude"
 const dataKey = ".dockerconfigjson"
+const secController = "secret-replication-controller"
+
+const (
+	SuccessSynced         = "Synced"
+	SuccessSyncedTemplate = "Secret %s synced successfully"
+)
 
 type Controller struct {
 	kubeclientset kubernetes.Interface
@@ -33,6 +42,7 @@ type Controller struct {
 	secretsSynced cache.InformerSynced
 
 	workqueue workqueue.RateLimitingInterface
+	recorder  record.EventRecorder
 }
 
 func NewController(
@@ -40,12 +50,18 @@ func NewController(
 	secretInformer coreinformers.SecretInformer,
 	nsInformer coreinformers.NamespaceInformer) *Controller {
 
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartLogging(klog.Infof)
+	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kubeclientset.CoreV1().Events("")})
+	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: secController})
+
 	controller := &Controller{
 		kubeclientset: kubeclientset,
 		secretsLister: secretInformer.Lister(),
 		secretsSynced: secretInformer.Informer().HasSynced,
 		nsLister:      nsInformer.Lister(),
 		workqueue:     workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "Secrets"),
+		recorder:      recorder,
 	}
 
 	secretInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -228,6 +244,7 @@ func (c *Controller) syncSecret(key string) error {
 				c.applySecret(sec, destNs.Name)
 			}
 		}
+		c.recorder.Event(sec, corev1.EventTypeNormal, SuccessSynced, fmt.Sprintf(SuccessSyncedTemplate, sec.Name))
 	}
 
 	return nil
