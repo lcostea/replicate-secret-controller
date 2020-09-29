@@ -1,3 +1,6 @@
 # replicate-secret-controller
 
-./bin/replicate-secret-controller --kubeconfig ~/.kube/config
+
+go build -o bin/secret-replication-controller .
+
+./bin/secret-replication-controller --kubeconfig ~/.kube/config
